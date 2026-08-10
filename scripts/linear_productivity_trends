@@ -1,0 +1,308 @@
+
+```{r}
+#Packages
+
+library(terra)
+library(modifiedmk)
+```
+
+```{r}
+# Loading annual NDVI sum stack
+ndvi_stack_terra <-rast("../data/ndvi_output/ndvi_annual_stack_sum_1997_2024.tif"
+)
+```
+
+```{r}
+ 
+# Pixel-wise corrected Mann-Kendall and Sen's slope function
+
+
+# This part retained the same statistical calculation used in the original eco.theilsen2() implementation. I tested it in a random sample.
+
+
+mk_sen_pixel <- function(x) {
+
+  if (sum(!is.na(x)) < 4) {
+
+    return(
+      c(
+        slope  = NA_real_,
+        pvalue = NA_real_
+      )
+    )
+  }
+
+  result <- modifiedmk::mmkh3lag(
+    as.vector(x)
+  )
+
+  c(slope  = result[[7]],
+    pvalue = result[[2]]
+  )
+}
+
+```
+
+
+```{r}
+
+# Configuring restartable spatial chunks in case the server went down
+
+chunk_dir <- "../output/MK_chunks"
+
+dir.create(
+  chunk_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+# Number of raster rows processed per chunk
+rows_per_chunk <- 250
+
+nr <- nrow(ndvi_stack_terra)
+
+row_starts <- seq( 1,nr, by = rows_per_chunk
+)
+
+cat("Chunks:", length(row_starts),"\n")
+```
+
+```{r}
+# Converting row numbers to raster extent
+
+rows_to_extent <- function(x, r1, r2) {
+
+  res_y <- terra::res(x)[2]
+
+  y_top <- terra::yFromRow(
+    x,
+    r1
+  ) + res_y / 2
+
+  y_bottom <- terra::yFromRow(
+    x,
+    r2
+  ) - res_y / 2
+
+  terra::ext(
+    terra::xmin(x),
+    terra::xmax(x),
+    y_bottom,
+    y_top
+  )
+}
+```
+
+```{r}
+# Mann-kenal sen but in restartable chunks
+
+for (k in seq_along(row_starts)) {
+
+  r1 <- row_starts[k]
+
+  r2 <- min(
+    r1 + rows_per_chunk - 1,
+    nr
+  )
+
+
+  # Completed rasters filename
+  final_file <- file.path(chunk_dir, sprintf( "MK_Sen_chunk_%03d_r%05d_r%05d.tif", k, r1,  r2 ))
+
+
+  # Temporary filename for chunks under processing
+  partial_file <- file.path(
+    chunk_dir,
+    sprintf(
+      "MK_Sen_chunk_%03d_PARTIAL.tif",
+      k
+    )
+  )
+
+
+  # Skiping the successfully completed chunks
+  if (file.exists(final_file)) {
+
+    cat("\nChunk",k, "of", length(row_starts), "already completed, skip\n" )
+
+    next
+  }
+
+
+  # Removing the incomplete ones
+  if (file.exists(partial_file)) { file.remove(  partial_file
+    )
+  }
+
+
+```
+
+
+```{r}
+# Extracting spatial rows while also keeping all the 28 annual layers
+
+  chunk_extent <- rows_to_extent( ndvi_stack_terra, r1, r2
+  )
+
+  ndvi_chunk <- terra::crop( ndvi_stack_terra, chunk_extent, snap = "near"
+  )
+
+
+  # Applying corrected Mk-Sen analysis to each pixel
+  chunk_time <- system.time({
+
+    chunk_result <- terra::app(
+      ndvi_chunk,
+      fun = mk_sen_pixel,
+      cores = 8,
+      filename = partial_file,
+      overwrite = TRUE
+    )
+
+  })
+
+
+  names(chunk_result) <- c(
+    "slope",
+    "pvalue"
+  )
+
+  # Releasoing memory
+  rm(chunk_result)
+  gc()
+
+
+  # Renaming them after successful completion
+  success <- file.rename(
+    partial_file,
+    final_file
+  )
+
+  if (!success) {
+
+    stop("Could not finalize chunk ", k )
+  }
+
+
+  cat("Chunk ", k, " completed in ", round(chunk_time["elapsed"] / 60,  1 )," minutes.\n",sep = "")
+}
+
+```
+
+
+
+```{r}
+
+# Merging all the completed chunks
+
+
+chunk_files <- list.files(chunk_dir, pattern ="^MK_Sen_chunk_[0-9]+_r[0-9]+_r[0-9]+\\.tif$",full.names = TRUE
+)
+
+chunk_files <- sort(chunk_files)
+
+cat( "Completed chunks found:", length(chunk_files), "\n")
+
+
+chunk_rasters <- lapply(
+  chunk_files,
+  function(f) {
+
+    r <- terra::rast(f) names(r) <- c("slope", "pvalue" )
+
+    r
+  }
+)
+
+
+chunk_collection <- terra::sprc(chunk_rasters)
+
+
+linear_result <- terra::merge(chunk_collection,filename = "../output/MK_Sen_full_1997_2024.tif",  overwrite = TRUE
+)
+
+names(linear_result) <- c(
+  "slope",
+  "pvalue"
+)
+
+linear_result
+
+```
+
+
+
+```{r}
+# Classifying linear productivity trends
+
+linear_class <- terra::ifel(
+
+  linear_result[["pvalue"]] < 0.05 &
+    linear_result[["slope"]] > 0,
+
+  1, # significant greening
+
+  terra::ifel(
+
+    linear_result[["pvalue"]] < 0.05 &
+      linear_result[["slope"]] < 0,
+
+    -1, # significant browning
+
+    0 # no trend
+  )
+)
+
+names(linear_class) <- "linear_trend_class"
+
+
+```
+
+
+```{r}
+# Saving the classified trend raster
+
+terra::writeRaster(linear_class,"../output/linear_trend_class_1997_2024.tif",overwrite = TRUE)
+```
+
+
+
+```{r}
+# Calculation of some stats and percentages
+
+trend_freq <- terra::freq(
+  linear_class
+)
+
+trend_freq$percent <- ( trend_freq$count /  sum(trend_freq$count)
+) * 100
+
+
+trend_freq$class <- ifelse(trend_freq$value == -1,
+
+  "Significant browning",
+
+  ifelse( trend_freq$value == 1,
+
+    "Significant greening",
+
+    "No significant trend"
+  )
+)
+
+
+trend_freq[,c(  "class","count", "percent" )
+]
+
+```
+
+
+```{r}
+# Plot
+
+class_cols <- c("red","grey","green")
+
+plot(linear_class, col = class_cols,legend = TRUE,
+  main = "Linear NDVI  Trends (1997–2024)")
+```
+
