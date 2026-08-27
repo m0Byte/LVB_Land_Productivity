@@ -1,10 +1,6 @@
 # Packages
 library(terra)
 
-# ------------------------------------------------------------
-# LOAD MODIFIED MANN-KENDALL RESULTS
-# ------------------------------------------------------------
-
 # Load both the long and short seasons
 long_mk <- rast(
   "~/SeasonalTrendsEdited/output/long_season_MK_results.tif"
@@ -75,8 +71,7 @@ names(short_class) <- "Trend_class"
 
 
 
-# Class frequencies and %
-
+# Calculation of class frequencies and %s
 
 long_freq <- freq(long_class)
 short_freq <- freq(short_class)
