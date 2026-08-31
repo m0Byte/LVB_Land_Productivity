@@ -1,0 +1,333 @@
+# Libraries 
+library(terra)
+library(modifiedmk)
+
+
+
+# Variables: Rainfall, Maximum temperature,  Minimum temperature
+
+
+# Load seasonal TerraClimate stacks
+long_rain <- rast(
+  "~/SeasonalTrendsEdited/data/climate/long_season_rainfall_1997_2024.tif"
+)
+
+short_rain <- rast(
+  "~/SeasonalTrendsEdited/data/climate/short_season_rainfall_1997_2024.tif"
+)
+
+long_tmax <- rast(
+  "~/SeasonalTrendsEdited/data/climate/long_season_tmax_1997_2024.tif"
+)
+
+short_tmax <- rast(
+  "~/SeasonalTrendsEdited/data/climate/short_season_tmax_1997_2024.tif"
+)
+
+long_tmin <- rast(
+  "~/SeasonalTrendsEdited/data/climate/long_season_tmin_1997_2024.tif"
+)
+
+short_tmin <- rast(
+  "~/SeasonalTrendsEdited/data/climate/short_season_tmin_1997_2024.tif"
+)
+
+
+
+# Serial autocorrelation assessment
+# Basin-wide seasonal mean time series
+
+long_rain_mean  <- as.numeric(global(long_rain, "mean", na.rm = TRUE)[, 1])
+short_rain_mean <- as.numeric(global(short_rain, "mean", na.rm = TRUE)[, 1])
+
+long_tmax_mean  <- as.numeric(global(long_tmax, "mean", na.rm = TRUE)[, 1])
+short_tmax_mean <- as.numeric(global(short_tmax, "mean", na.rm = TRUE)[, 1])
+
+long_tmin_mean  <- as.numeric(global(long_tmin, "mean", na.rm = TRUE)[, 1])
+short_tmin_mean <- as.numeric(global(short_tmin, "mean", na.rm = TRUE)[, 1])
+
+
+# Extract ACF values for the first three lags
+acf_values <- function(x) {
+
+  a <- acf(
+    x,
+    lag.max = 3,
+    plot = FALSE,
+    na.action = na.pass
+  )
+
+  as.numeric(a$acf[2:4])
+}
+
+
+acf_results <- data.frame(
+  Variable = c(
+    "Long rainfall",
+    "Short rainfall",
+    "Long Tmax",
+    "Short Tmax",
+    "Long Tmin",
+    "Short Tmin"
+  ),
+
+  Lag1 = c(
+    acf_values(long_rain_mean)[1],
+    acf_values(short_rain_mean)[1],
+    acf_values(long_tmax_mean)[1],
+    acf_values(short_tmax_mean)[1],
+    acf_values(long_tmin_mean)[1],
+    acf_values(short_tmin_mean)[1]
+  ),
+
+  Lag2 = c(
+    acf_values(long_rain_mean)[2],
+    acf_values(short_rain_mean)[2],
+    acf_values(long_tmax_mean)[2],
+    acf_values(short_tmax_mean)[2],
+    acf_values(long_tmin_mean)[2],
+    acf_values(short_tmin_mean)[2]
+  ),
+
+  Lag3 = c(
+    acf_values(long_rain_mean)[3],
+    acf_values(short_rain_mean)[3],
+    acf_values(long_tmax_mean)[3],
+    acf_values(short_tmax_mean)[3],
+    acf_values(long_tmin_mean)[3],
+    acf_values(short_tmin_mean)[3]
+  )
+)
+
+
+# Approximate 95% confidence limit for 28 observations
+
+n <- 28
+acf_limit <- 1.96 / sqrt(n)
+
+acf_limit
+acf_results
+
+
+
+
+# No significant serial autocorrelation was detected at lags 1-3, therefore the ordinary Mann-Kendall test is used.
+
+mk_climate_fun <- function(x) {
+
+  # Remove missing observations
+  x <- x[!is.na(x)]
+
+  # Require at least three valid observations
+  if (length(x) < 3) {
+    return(c(
+      slope = NA_real_,
+      pvalue = NA_real_
+    ))
+  }
+
+  # Apply ordinary Mann-Kendall test
+  mk <- try(
+    suppressWarnings(
+      modifiedmk::mkttest(x)
+    ),
+    silent = TRUE
+  )
+
+  # Return NA if the test fails
+  if (inherits(mk, "try-error")) {
+    return(c(
+      slope = NA_real_,
+      pvalue = NA_real_
+    ))
+  }
+
+  # Extract Sen's slope and Mann-Kendall p-value
+  slope <- as.numeric(mk[[2]])
+  pvalue <- as.numeric(mk[[5]])
+
+  if (!is.finite(slope)) {
+    slope <- NA_real_
+  }
+
+  if (!is.finite(pvalue)) {
+    pvalue <- NA_real_
+  }
+
+  return(c(
+    slope = slope,
+    pvalue = pvalue
+  ))
+}
+
+
+
+# Apply Mann-Kendall analysis
+
+long_rain_mk <- app(
+  long_rain,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_rainfall_MK.tif",
+  overwrite = TRUE
+)
+
+names(long_rain_mk) <- c("Sen_slope", "p_value")
+
+
+short_rain_mk <- app(
+  short_rain,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_rainfall_MK.tif",
+  overwrite = TRUE
+)
+
+names(short_rain_mk) <- c("Sen_slope", "p_value")
+
+
+long_tmax_mk <- app(
+  long_tmax,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_tmax_MK.tif",
+  overwrite = TRUE
+)
+
+names(long_tmax_mk) <- c("Sen_slope", "p_value")
+
+
+short_tmax_mk <- app(
+  short_tmax,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_tmax_MK.tif",
+  overwrite = TRUE
+)
+
+names(short_tmax_mk) <- c("Sen_slope", "p_value")
+
+
+long_tmin_mk <- app(
+  long_tmin,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_tmin_MK.tif",
+  overwrite = TRUE
+)
+
+names(long_tmin_mk) <- c("Sen_slope", "p_value")
+
+
+short_tmin_mk <- app(
+  short_tmin,
+  fun = mk_climate_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_tmin_MK.tif",
+  overwrite = TRUE
+)
+
+names(short_tmin_mk) <- c("Sen_slope", "p_value")
+
+
+# Classify climate trends
+# 1 : significant decrease
+# 2 : no significant trend
+# 3 : significant increase
+
+
+climate_class_fun <- function(x) {
+
+  slope <- x[1]
+  pvalue <- x[2]
+
+  if (is.na(slope) || is.na(pvalue)) {
+    return(NA_real_)
+  }
+
+  if (pvalue < 0.05 && slope < 0) {
+    return(1)
+  }
+
+  if (pvalue < 0.05 && slope > 0) {
+    return(3)
+  }
+
+  return(2)
+}
+
+
+
+# Apply climate trend classification
+
+long_rain_class <- app(
+  long_rain_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_rainfall_trend_class.tif",
+  overwrite = TRUE
+)
+
+short_rain_class <- app(
+  short_rain_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_rainfall_trend_class.tif",
+  overwrite = TRUE
+)
+
+long_tmax_class <- app(
+  long_tmax_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_tmax_trend_class.tif",
+  overwrite = TRUE
+)
+
+short_tmax_class <- app(
+  short_tmax_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_tmax_trend_class.tif",
+  overwrite = TRUE
+)
+
+long_tmin_class <- app(
+  long_tmin_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/long_season_tmin_trend_class.tif",
+  overwrite = TRUE
+)
+
+short_tmin_class <- app(
+  short_tmin_mk,
+  fun = climate_class_fun,
+  filename = "~/SeasonalTrendsEdited/output/short_season_tmin_trend_class.tif",
+  overwrite = TRUE
+)
+
+
+
+
+# Calculate class percentages
+climate_percent <- function(x) {
+
+  f <- freq(x)
+
+  f$percentage <-
+    f$count / sum(f$count) * 100
+
+  return(f)
+}
+
+
+long_rain_freq  <- climate_percent(long_rain_class)
+print(long_rain_freq)
+
+short_rain_freq <- climate_percent(short_rain_class)
+print(short_rain_freq)
+
+long_tmax_freq  <- climate_percent(long_tmax_class)
+print(long_tmax_freq)
+
+
+short_tmax_freq <- climate_percent(short_tmax_class)
+print(short_tmax_freq)
+
+long_tmin_freq  <- climate_percent(long_tmin_class)
+print(long_tmin_freq)
+
+
+short_tmin_freq <- climate_percent(short_tmin_class)
+print(short_tmin_freq)
+
